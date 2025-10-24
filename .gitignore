@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Logs
+pdf_reader.log
+
+# Large or sensitive files
+*.pdf

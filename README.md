@@ -14,6 +14,9 @@ A Python-based PDF reader built with PyMuPDF and Tkinter, featuring:
 - Removed redundant Previous/Next buttons (Page Up/Down remain)
 - Updated the scroll functionality to run smoothly 
 
+## License
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
 ## Requirements
 - Python 3.8+
 - PyMuPDF (`pip install PyMuPDF`)

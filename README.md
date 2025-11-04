@@ -9,7 +9,7 @@ A Python-based PDF reader built with PyMuPDF and Tkinter, featuring:
 - Centered PDF pages with equal borders
 - Custom icon for Windows executable
 
-## Recent Changes 0411/2025
+## Recent Changes 04/11/2025
 - Reorganized search UI: Entry positioned between navigation buttons, About at end
 - Removed redundant Previous/Next buttons (Page Up/Down remain)
 - Updated the scroll functionality to run smoothly 

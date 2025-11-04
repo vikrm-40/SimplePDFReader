@@ -1,0 +1,174 @@
+pyinstaller --clean --onefile --windowed --name SimplePDFReader --icon=icon.ico pdf_reader.py
+
+
+
+
+Python:
+
+installed path: C:\Users\DELL\AppData\Local\Programs\Python\Python314
+
+Install Python 3.10+ (3.11 recommended) and the required packages:
+pip install PyQt6 PyMuPDF Pillow
+
+pip install PyPDF2
+pip install pdf2image
+pip install pyinstaller
+
+Location of the Poppler in github : https://github.com/oschwartz10612/poppler-windows/releases/tag/v25.07.0-0
+
+
+Run the pyhton application from command prompt:    C:\Users\DELL\Desktop\Simple PDF Reader - Python>python pdf_reader.py
+
+
+
+Learned Commands:
+1.Clear
+
+
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$Convert python code into an executable file:$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+vvvv
+
+Convert python code into an executable file:
+
+Step-by-Step Guide to Create a Windows Executable
+Step 1: Install PyInstaller
+
+Ensure Python is Installed:
+
+Verify Python 3.8+ is installed: python --version.
+If not, download from python.org.
+
+
+Install PyInstaller:
+
+Open a command prompt and run:
+pip install pyinstaller
+
+Verify installation:
+pyinstaller --version
+
+
+
+Verify Dependencies:
+
+Ensure required libraries are installed:
+pip install PyMuPDF Pillow
+
+Confirm: python -c "import fitz, PIL; print('Libraries installed')"
+
+
+
+Step 2: Update the Script for Executable Compatibility
+To ensure the script works as an executable, we need to handle file paths correctly, as PyInstaller creates a temporary folder (_MEIPASS) for bundled resources. The updated script below modifies the logging setup to use a dynamic path and includes a helper function to resolve resource paths.pdf_reader_pymupdf.pypython•Step 3: Create the Executable with PyInstaller
+
+Save the Script:
+
+Save the updated code as pdf_reader_pymupdf.py in a directory (e.g., C:\PDFReader).
+
+
+Run PyInstaller:
+
+Open a command prompt in the script’s directory:
+cd C:\PDFReader
+
+Run PyInstaller to create a single executable:
+textpyinstaller --onefile --windowed --name SimplePDFReader pdf_reader.py
+
+--onefile: Packages everything into a single .exe.
+--windowed: Prevents a console window from appearing (suitable for GUI apps).
+--name SimplePDFReader: Names the executable SimplePDFReader.exe.
+
+
+
+
+Wait for Completion:
+
+PyInstaller will create:
+
+A build folder (temporary files).
+A dist folder containing SimplePDFReader.exe.
+A .spec file (configuration for PyInstaller).
+
+
+The process may take a few minutes, depending on your system.
+
+
+Locate the Executable:
+
+Find SimplePDFReader.exe in the dist folder (e.g., C:\PDFReader\dist).
+The executable includes Python, PyMuPDF, Pillow, and all dependencies.
+
+
+
+Step 4: Test the Executable
+
+Run the Executable:
+
+Double-click SimplePDFReader.exe in the dist folder, or run from the command prompt:
+.\dist\SimplePDFReader.exe
+
+Expected Output:
+
+An 800x600 window with buttons (Open PDF, Previous, Next, Zoom In, Zoom Out, Search, Next Match), a search entry, a page label, a canvas with a scrollbar, and a status bar.
+Clicking “Open PDF” should load and display a PDF’s first page.
+Navigation, zoom, and search (with yellow highlighting) should work.
+
+
+
+
+Check the Log File:
+
+The pdf_reader.log file will be created in the same directory as the executable.
+Check it for errors if the app doesn’t work as expected.
+
+
+
+Step 5: Distribute the Executable
+
+Single File: Copy SimplePDFReader.exe to any Windows system. No additional files or Python installation are needed.
+Folder Distribution (Optional):
+
+If you prefer smaller file size, use PyInstaller without --onefile:
+pyinstaller --windowed --name SimplePDFReader pdf_reader_pymupdf.py
+
+The dist\SimplePDFReader folder will contain the executable and dependencies. Share the entire folder.
+
+
+System Requirements: The executable should work on Windows 7/8/10/11 (64-bit). Ensure the target system has sufficient memory (e.g., 4GB+ RAM) for large PDFs.
+
+Step 6: Optional Enhancements
+
+Add an Icon (Optional):
+
+Create or download an .ico file (e.g., icon.ico).
+Run PyInstaller with:
+pyinstaller --onefile --windowed --name SimplePDFReader --icon=icon.ico pdf_reader_pymupdf.py
+
+This sets a custom icon for the executable.
+
+^^^^
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$Convert python code into an executable file:$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+pyinstaller --clean --onefile --windowed --name SimplePDFReader --icon=icon.ico pdf_reader.py
+
+ git add pdf_reader.py icon.ico README.md .gitignore
+
+ git config --global user.email "kondapallivikram@outlook.com"
+ git config --global user.name "vikrm-40"
+
+
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+To add changes, edit files in C:\PDFReader, then:
+git add .
+git commit -m "Describe your changes"
+git push origin master
+
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

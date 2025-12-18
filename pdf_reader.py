@@ -1,412 +1,404 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox
-import logging
-import sys
-import os
+from tkinter import ttk, filedialog, messagebox
+import fitz  # PyMuPDF
 from PIL import Image, ImageTk
-try:
-    import fitz  # PyMuPDF
-except ImportError:
-    messagebox.showerror("Error", "PyMuPDF is not installed. Install it using 'pip install PyMuPDF'.")
-    sys.exit(1)
+import os
+import sys
+import threading
 
-# Helper function for PyInstaller resource paths
-def resource_path(relative_path):
-    """Get absolute path to resource, works for dev and PyInstaller"""
-    try:
-        base_path = sys._MEIPASS
-    except AttributeError:
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
 
-# Set up logging
-log_file = resource_path("pdf_reader.log")
-logging.basicConfig(filename=log_file, level=logging.DEBUG, 
-                    format='%(asctime)s - %(levelname)s - %(message)s')
-
-# Check PyMuPDF version
-PYMUPDF_VERSION = tuple(map(int, fitz.__version__.split('.')))
-logging.info(f"PyMuPDF version: {fitz.__version__}")
-
-class PDFReaderApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Simple PDF Reader (PyMuPDF)")
-        self.root.geometry("800x600")
-        self.pdf_doc = None
+class PDFViewer(tk.Tk):
+    def __init__(self, pdf_path=None):
+        super().__init__()
+        self.pdf_path = pdf_path
+        self.doc = None
         self.current_page = 0
-        self.zoom_factor = 1.0
-        self.search_results = []
-        self.current_search_index = -1
-        self.vertical_scrollbar = None
+        self.zoom_level = 0.85  # Default 85%
+        self.thumbs_images = []  # Cached thumbnails
         self.thumbnails_visible = False
+        self.document_images = []  # Cached full document images for continuous scroll
+        self.page_heights = []  # Heights for page calculation
 
-        # Control Frame
-        self.control_frame = tk.Frame(self.root, bg="lightgray")
-        self.control_frame.pack(fill=tk.X, side=tk.TOP, pady=5)
+        self.title("Simple PDF Reader v2.0")
+        self.geometry("1200x850")
+        self.minsize(800, 600)
 
-        # Buttons
-        button_width = 14
-        col = 0
-        tk.Button(self.control_frame, text="Open PDF", command=self.open_pdf, width=button_width, height=1).grid(row=0, column=col, padx=5, pady=5); col += 1
-        tk.Button(self.control_frame, text="Page Up", command=self.prev_page, width=button_width, height=1).grid(row=0, column=col, padx=5, pady=5); col += 1
-        tk.Button(self.control_frame, text="Page Down", command=self.next_page, width=button_width, height=1).grid(row=0, column=col, padx=5, pady=5); col += 1
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self.setup_ui()
 
-        # Search
-        self.search_var = tk.StringVar()
-        tk.Entry(self.control_frame, textvariable=self.search_var, width=20).grid(row=0, column=col, padx=5, pady=5); col += 1
-        tk.Button(self.control_frame, text="Search", command=self.search_text, width=button_width, height=1).grid(row=0, column=col, padx=5, pady=5); col += 1
-        tk.Button(self.control_frame, text="Next Match", command=self.next_search, width=button_width, height=1).grid(row=0, column=col, padx=5, pady=5); col += 1
+        if pdf_path and os.path.isfile(pdf_path):
+            self.open_pdf_document(pdf_path)
+            self.load_document_continuous()
+        else:
+            self.after(200, self.show_welcome_screen)  # Delay for full render
 
-        # Zoom & View
-        tk.Button(self.control_frame, text="Zoom In", command=self.zoom_in, width=button_width, height=1).grid(row=0, column=col, padx=5, pady=5); col += 1
-        tk.Button(self.control_frame, text="Zoom Out", command=self.zoom_out, width=button_width, height=1).grid(row=0, column=col, padx=5, pady=5); col += 1
-        tk.Button(self.control_frame, text="Fit to Window", command=self.fit_to_window, width=button_width, height=1).grid(row=0, column=col, padx=5, pady=5); col += 1
-        tk.Button(self.control_frame, text="Show/Hide Thumbs", command=self.toggle_thumbnails, width=button_width, height=1).grid(row=0, column=col, padx=5, pady=5); col += 1
+    def setup_ui(self):
+        # Toolbar
+        toolbar = ttk.Frame(self, relief=tk.RAISED, padding=12)
+        toolbar.pack(side=tk.TOP, fill=tk.X)
 
-        # Page Label
-        self.page_label = tk.Label(self.control_frame, text="Page: 0/0", width=10)
-        self.page_label.grid(row=0, column=col, padx=5, pady=5); col += 1
+        button_width = 12
 
-        # About
-        tk.Button(self.control_frame, text="About", command=self.show_about, width=button_width, height=1).grid(row=0, column=col, padx=5, pady=5)
+        ttk.Button(toolbar, text="Open PDF", width=button_width, command=self.open_new_pdf).grid(row=0, column=0, padx=6, pady=6)
+        ttk.Button(toolbar, text="Previous", width=button_width, command=self.prev_page).grid(row=0, column=1, padx=6)
+        self.page_label = ttk.Label(toolbar, text="No document", font=("Segoe UI", 11, "bold"), width=20, anchor="center")
+        self.page_label.grid(row=0, column=2, padx=20)
+        ttk.Button(toolbar, text="Next", width=button_width, command=self.next_page).grid(row=0, column=3, padx=6)
 
-        # Main Frame
-        self.main_frame = tk.Frame(self.root)
-        self.main_frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Separator(toolbar, orient=tk.VERTICAL).grid(row=0, column=4, padx=25, sticky="ns")
 
-        # Canvas Frame
-        self.canvas_frame = tk.Frame(self.main_frame)
-        self.canvas_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-        self.canvas = tk.Canvas(self.canvas_frame, bg="white")
-        self.h_scrollbar = tk.Scrollbar(self.canvas_frame, orient=tk.HORIZONTAL, command=self.canvas.xview)
-        self.canvas.configure(xscrollcommand=self.h_scrollbar.set)
-        self.h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
-        self.canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        self.canvas.create_text(300, 200, text="No PDF loaded. Click 'Open PDF' to start.", font=("Arial", 12))
+        ttk.Button(toolbar, text="Zoom In", width=button_width, command=self.zoom_in).grid(row=0, column=5, padx=6)
+        ttk.Button(toolbar, text="Zoom Out", width=button_width, command=self.zoom_out).grid(row=0, column=6, padx=6)
+        ttk.Button(toolbar, text="Fit Width", width=button_width, command=self.fit_to_width).grid(row=0, column=7, padx=6)
 
-        # Thumbnail Sidebar
-        self.thumbnail_frame = tk.Frame(self.main_frame, width=150, bg="lightgray")
-        self.thumbnail_canvas = tk.Canvas(self.thumbnail_frame, width=150, bg="lightgray")
-        self.thumbnail_scrollbar = tk.Scrollbar(self.thumbnail_frame, orient=tk.VERTICAL, command=self.thumbnail_canvas.yview)
-        self.thumbnail_canvas.configure(yscrollcommand=self.thumbnail_scrollbar.set)
-        self.thumbnail_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.thumbnail_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.thumbnail_frame.pack(side=tk.LEFT, fill=tk.Y)
-        self.thumbnail_frame.pack_forget()
+        ttk.Label(toolbar, text="Zoom:", font=("Arial", 10)).grid(row=0, column=8, padx=(40, 8))
+        self.zoom_display = ttk.Label(toolbar, text="85%", width=8, relief="sunken", anchor="center", font=("Arial", 10))
+        self.zoom_display.grid(row=0, column=9, padx=6)
 
-        # Bottom Status
-        self.bottom_frame = tk.Frame(self.root, bg="lightgray")
-        self.bottom_frame.pack(fill=tk.X, side=tk.BOTTOM)
-        self.status_label = tk.Label(self.bottom_frame, text="No PDF loaded", anchor=tk.W, bg="lightgray")
-        self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        self.zoom_label = tk.Label(self.bottom_frame, text="Zoom: 100%", anchor=tk.E, bg="lightgray")
-        self.zoom_label.pack(side=tk.RIGHT, padx=5)
+        ttk.Separator(toolbar, orient=tk.VERTICAL).grid(row=0, column=10, padx=25, sticky="ns")
 
-        # Enhanced Bindings
-        self.canvas.bind("<MouseWheel>", self._on_canvas_mousewheel)
-        self.canvas.bind("<Button-4>", lambda e: self._scroll_page(-1))
-        self.canvas.bind("<Button-5>", lambda e: self._scroll_page(1))
-        self.canvas.bind("<Double-Button-1>", self._double_click_zoom)
-        self.root.bind("<Configure>", lambda e: self._resize_update())
+        ttk.Button(toolbar, text="Thumbs", width=button_width, command=self.toggle_thumbnails).grid(row=0, column=11, padx=12)
+        ttk.Button(toolbar, text="About", width=button_width, command=self.show_about).grid(row=0, column=12, padx=12)
 
-        self.image_tk = None
-        self.thumbnail_images = []
-        self.animation_id = None
-        logging.info("GUI initialized (Light mode only)")
+        # Main frame for canvas and thumbnails
+        self.main_frame = ttk.Frame(self)
+        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=15)
 
-    def _double_click_zoom(self, event):
-        if not self.pdf_doc:
+        # Thumbnails sidebar (hidden by default)
+        self.thumbs_frame = ttk.Frame(self.main_frame, width=150)
+        self.thumbs_canvas = tk.Canvas(self.thumbs_frame, bg="lightgray", width=150, height=400)
+        self.thumbs_scroll = ttk.Scrollbar(self.thumbs_frame, orient=tk.VERTICAL, command=self.thumbs_canvas.yview)
+        self.thumbs_canvas.configure(yscrollcommand=self.thumbs_scroll.set)
+        self.thumbs_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.thumbs_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.thumbs_frame.pack(side=tk.LEFT, fill=tk.Y)
+        self.thumbs_frame.pack_forget()
+
+        # Bind mouse wheel to thumbnails
+        self.thumbs_canvas.bind("<MouseWheel>", self.on_thumbs_scroll)
+        self.thumbs_canvas.bind("<Button-4>", self.on_thumbs_scroll)
+        self.thumbs_canvas.bind("<Button-5>", self.on_thumbs_scroll)
+
+        # Main canvas for continuous scrolling
+        canvas_frame = ttk.Frame(self.main_frame)
+        canvas_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        self.canvas = tk.Canvas(canvas_frame, bg="#f8f8f8", highlightthickness=0)
+        v_scroll = ttk.Scrollbar(canvas_frame, orient=tk.VERTICAL, command=self.canvas.yview)
+        h_scroll = ttk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL, command=self.canvas.xview)
+        self.canvas.configure(yscrollcommand=v_scroll.set, xscrollcommand=h_scroll.set)
+
+        v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        h_scroll.pack(side=tk.BOTTOM, fill=tk.X)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Mouse bindings for main canvas
+        self.canvas.bind("<MouseWheel>", self.handle_scroll)
+        self.canvas.bind("<Button-4>", self.handle_scroll)
+        self.canvas.bind("<Button-5>", self.handle_scroll)
+        self.canvas.bind("<Control-MouseWheel>", self.on_ctrl_mousewheel)
+        self.canvas.bind("<Configure>", self.on_canvas_resize)
+        self.canvas.bind("<Enter>", lambda e: self.canvas.focus_set())  # Focus on hover
+
+    def handle_scroll(self, event):
+        """Combined handler for scroll + page label update"""
+        if not self.doc:
             return
-        x, y = event.x, event.y
-        canvas_width = self.canvas.winfo_width()
-        canvas_height = self.canvas.winfo_height()
-        pix = self.pdf_doc[self.current_page].get_pixmap(matrix=fitz.Matrix(2.0 * self.zoom_factor, 2.0 * self.zoom_factor))
-        x_offset = max(0, (canvas_width - pix.width) // 2)
-        y_offset = max(0, (canvas_height - pix.height) // 2)
-        click_x = x - x_offset
-        click_y = y - y_offset
-        if 0 <= click_x <= pix.width and 0 <= click_y <= pix.height:
-            if self.zoom_factor < 2.0:
-                self.zoom_factor *= 1.5
-            else:
-                self.zoom_factor /= 1.5
-            self.update_page()
-            self.zoom_label.config(text=f"Zoom: {int(self.zoom_factor * 100)}%")
-            self.canvas.yview_moveto((click_y / pix.height) - 0.3)
-            logging.debug(f"Double-click zoom at ({click_x}, {click_y})")
 
-    def _smooth_scroll(self, target_y):
-        if self.animation_id:
-            self.root.after_cancel(self.animation_id)
-        current_y = self.canvas.yview()[0]
-        steps = 10
-        step = (target_y - current_y) / steps
-        def animate(i=0):
-            if i < steps:
-                self.canvas.yview_moveto(current_y + step * (i + 1))
-                self.animation_id = self.root.after(10, animate, i + 1)
-            else:
-                self.animation_id = None
-        animate()
+        # Scroll direction
+        delta = getattr(event, "delta", 0)
+        num = getattr(event, "num", 0)
+        if delta > 0 or num == 4:
+            self.canvas.yview_scroll(-2, "units")  # Up
+        elif delta < 0 or num == 5:
+            self.canvas.yview_scroll(2, "units")  # Down
 
-    def _on_canvas_mousewheel(self, event):
-        if not self.pdf_doc:
+        # Update page label
+        self.update_current_page_from_scroll()
+
+    def update_current_page_from_scroll(self):
+        """Calculate current page from scroll position"""
+        if not self.doc or not self.page_heights:
             return
-        scroll_pos = self.canvas.yview()
-        at_top = scroll_pos[0] <= 0.0
-        at_bottom = scroll_pos[1] >= 1.0
-        delta = event.delta
 
-        if delta > 0:  # Scroll up
-            if at_top and self.current_page > 0:
-                self.prev_page()
-                self._smooth_scroll(1.0)
-            else:
-                self.canvas.yview_scroll(-1, "units")
-        elif delta < 0:  # Scroll down
-            if at_bottom and self.current_page < self.pdf_doc.page_count - 1:
-                self.next_page()
-                self._smooth_scroll(0.0)
-            else:
-                self.canvas.yview_scroll(1, "units")
+        scroll_pos = self.canvas.yview()[0]
+        total_height = self.canvas.bbox("all")[3] if self.canvas.bbox("all") else 0
+        current_y = scroll_pos * total_height
 
-    def _scroll_page(self, direction):
-        if not self.pdf_doc:
+        cumulative = 0
+        for i, height in enumerate(self.page_heights):
+            if current_y < cumulative + height:
+                self.current_page = i
+                self.update_page_info()
+                break
+            cumulative += height
+
+    def on_thumbs_scroll(self, event):
+        """Mouse wheel scroll for thumbnails"""
+        if event.num == 4 or getattr(event, "delta", 0) > 0:
+            self.thumbs_canvas.yview_scroll(-1, "units")
+        else:
+            self.thumbs_canvas.yview_scroll(1, "units")
+
+    def on_ctrl_mousewheel(self, event):
+        if not self.doc:
             return
-        scroll_pos = self.canvas.yview()
-        at_top = scroll_pos[0] <= 0.0
-        at_bottom = scroll_pos[1] >= 1.0
+        if event.delta > 0:
+            self.zoom_in()
+        else:
+            self.zoom_out()
 
-        if direction < 0:  # Scroll up
-            if at_top and self.current_page > 0:
-                self.prev_page()
-                self._smooth_scroll(1.0)
-            else:
-                self.canvas.yview_scroll(-3, "units")
-        else:  # Scroll down
-            if at_bottom and self.current_page < self.pdf_doc.page_count - 1:
-                self.next_page()
-                self._smooth_scroll(0.0)
-            else:
-                self.canvas.yview_scroll(3, "units")
-
-    def _resize_update(self):
-        if self.pdf_doc:
-            self.update_page()
-
-    def show_about(self):
-        about_message = (
-            "Simple PDF Reader v2.0\n\n"
-            "Project Owner / Contributor: H Vikram Kondapalli\n"
-            "Code Generator: Grok, created by xAI\n\n"
-            "Features:\n"
-            "- Smooth animated scroll\n"
-            "- Double-click to zoom\n"
-            "- Search with highlighting\n"
-            "- Thumbnail sidebar\n"
-            "- Fit to window\n\n"
-            "Built with Python, PyMuPDF, Pillow, and Tkinter."
-        )
-        messagebox.showinfo("About Simple PDF Reader", about_message)
-
-    def open_pdf(self, file_path=None):
-        if not file_path:
-            file_path = filedialog.askopenfilename(filetypes=[("PDF Files", "*.pdf")])
-        if file_path:
-            try:
-                self.pdf_doc = fitz.open(file_path)
-                if self.pdf_doc.is_encrypted:
-                    raise ValueError("Encrypted PDF")
-                if self.pdf_doc.page_count == 0:
-                    raise ValueError("Empty PDF")
-                self.current_page = 0
-                self.zoom_factor = 0.85
-                self.update_page()
-                self.update_thumbnails()
-                self.page_label.config(text=f"Page: {self.current_page + 1}/{self.pdf_doc.page_count}")
-                self.status_label.config(text=f"Loaded: {os.path.basename(file_path)}")
-                self.zoom_label.config(text=f"Zoom: {int(self.zoom_factor * 100)}%")
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to open PDF: {str(e)}")
-                self.pdf_doc = None
-
-    def update_page(self):
-        if not self.pdf_doc:
-            return
+    def open_pdf_document(self, path):
         try:
-            page = self.pdf_doc[self.current_page]
-            zoom = 2.0 * self.zoom_factor
-            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-            img = pix.pil_image() if PYMUPDF_VERSION >= (1, 22, 0) and hasattr(pix, 'pil_image') else Image.frombytes("RGB", (pix.width, pix.height), pix.tobytes("RGB"))
-            self.image_tk = ImageTk.PhotoImage(img)
-            self.canvas.delete("all")
+            if self.doc:
+                self.doc.close()
+            self.doc = fitz.open(path)
+            self.pdf_path = path
+            self.current_page = 0
+            self.zoom_level = 0.85
+            self.thumbs_images = []
+            self.document_images = []
+            self.page_heights = []
+            self.title(f"Simple PDF Reader v2.0 - {os.path.basename(path)}")
+            self.update_page_info()
+            self.load_document_continuous()
+            self.generate_thumbnails()
+        except Exception as e:
+            messagebox.showerror("Error", f"Cannot open PDF:\n{e}")
+            self.doc = None
+            self.show_welcome_screen()
+
+    def load_document_continuous(self):
+        """Load all pages stacked for continuous scrolling"""
+        if not self.doc:
+            return
+
+        self.document_images = []
+        self.page_heights = []
+        total_height = 0
+
+        for page_num in range(len(self.doc)):
+            page = self.doc[page_num]
+            mat = fitz.Matrix(self.zoom_level, self.zoom_level)
+            pix = page.get_pixmap(matrix=mat, alpha=False)
+
+            img_width = pix.width
+            img_height = pix.height
             canvas_width = self.canvas.winfo_width()
-            canvas_height = self.canvas.winfo_height()
-            x_offset = max(0, (canvas_width - pix.width) // 2)
-            y_offset = max(0, (canvas_height - pix.height) // 2)
-            self.canvas.create_image(x_offset, y_offset, anchor=tk.NW, image=self.image_tk)
-            self.canvas.config(scrollregion=(0, 0, pix.width + 2 * x_offset, pix.height + 2 * y_offset))
+            x_offset = max(0, (canvas_width - img_width) // 2)
 
-            if self.vertical_scrollbar:
-                self.vertical_scrollbar.pack_forget()
-                self.vertical_scrollbar = None
-            if pix.height > canvas_height:
-                self.vertical_scrollbar = tk.Scrollbar(self.canvas_frame, orient=tk.VERTICAL, command=self.canvas.yview)
-                self.canvas.configure(yscrollcommand=self.vertical_scrollbar.set)
-                self.vertical_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            page_photo = ImageTk.PhotoImage(img)
+            self.document_images.append((page_photo, x_offset, total_height))
+            self.page_heights.append(img_height + 20)  # Include gap
 
-            self.status_label.config(text=f"Page {self.current_page + 1} displayed")
-            self.zoom_label.config(text=f"Zoom: {int(self.zoom_factor * 100)}%")
-        except Exception as e:
-            logging.error(f"Page update failed: {str(e)}")
+            # Stack vertically with 20px gap
+            total_height += img_height + 20
 
-    def update_thumbnails(self):
-        self.thumbnail_canvas.delete("all")
-        self.thumbnail_images = []
-        if not self.pdf_doc or not self.thumbnails_visible:
+        # Render all on canvas
+        self.canvas.delete("all")
+        for photo, x, y in self.document_images:
+            self.canvas.create_image(x, y, image=photo, anchor="nw")
+
+        self.canvas.config(scrollregion=(0, 0, self.canvas.winfo_width(), total_height))
+
+        self.zoom_display.config(text=f"{int(self.zoom_level * 100)}%")
+
+        # Focus canvas for scroll
+        self.canvas.focus_set()
+
+    def on_canvas_resize(self, event=None):
+        if self.doc:
+            self.load_document_continuous()
+
+    def update_page_info(self):
+        if self.doc:
+            total = len(self.doc)
+            self.page_label.config(text=f"Page {self.current_page + 1} of {total}")
+        else:
+            self.page_label.config(text="No document")
+
+    def prev_page(self):
+        if self.doc and self.current_page > 0:
+            self.current_page -= 1
+            self.update_page_info()
+            self.refresh_thumbnails()
+            # Scroll to page top
+            page_y = sum(self.page_heights[:self.current_page])
+            self.canvas.yview_moveto(page_y / self.canvas.bbox("all")[3])
+
+    def next_page(self):
+        if self.doc and self.current_page < len(self.doc) - 1:
+            self.current_page += 1
+            self.update_page_info()
+            self.refresh_thumbnails()
+            # Scroll to page top
+            page_y = sum(self.page_heights[:self.current_page])
+            self.canvas.yview_moveto(page_y / self.canvas.bbox("all")[3])
+
+    def zoom_in(self):
+        if not self.doc:
             return
-        try:
-            y_pos = 10
-            for page_num in range(self.pdf_doc.page_count):
-                page = self.pdf_doc[page_num]
-                pix = page.get_pixmap(matrix=fitz.Matrix(0.2, 0.2))
-                if pix.colorspace != fitz.csRGB:
-                    pix = fitz.Pixmap(fitz.csRGB, pix)
-                img = pix.pil_image() if PYMUPDF_VERSION >= (1, 22, 0) and hasattr(pix, 'pil_image') else Image.frombytes("RGB", (pix.width, pix.height), pix.tobytes("RGB"))
-                img = img.resize((100, int(100 * pix.height / pix.width)), Image.Resampling.LANCZOS)
-                img_tk = ImageTk.PhotoImage(img)
-                self.thumbnail_images.append(img_tk)
-                self.thumbnail_canvas.create_image(75, y_pos, anchor=tk.N, image=img_tk)
-                self.thumbnail_canvas.create_text(75, y_pos + img.height // 2, text=f"Page {page_num + 1}", font=("Arial", 8))
-                self.thumbnail_canvas.tag_bind(self.thumbnail_canvas.create_rectangle(25, y_pos - img.height // 2, 125, y_pos + img.height // 2, outline=""), "<Button-1>", lambda e, pn=page_num: self.goto_page(pn))
-                y_pos += img.height + 20
-            self.thumbnail_canvas.config(scrollregion=(0, 0, 150, y_pos))
-        except Exception as e:
-            logging.error(f"Thumbnails failed: {str(e)}")
+        self.zoom_level = min(5.0, self.zoom_level * 1.25)
+        self.load_document_continuous()
 
-    def goto_page(self, page_num):
-        if 0 <= page_num < self.pdf_doc.page_count:
-            self.current_page = page_num
-            self.update_page()
-            self.page_label.config(text=f"Page: {self.current_page + 1}/{self.pdf_doc.page_count}")
-            self.reset_search()
-            self._smooth_scroll(0.0)
+    def zoom_out(self):
+        if not self.doc:
+            return
+        self.zoom_level = max(0.2, self.zoom_level * 0.8)
+        self.load_document_continuous()
+
+    def fit_to_width(self):
+        if not self.doc:
+            return
+        canvas_width = self.canvas.winfo_width()
+        if canvas_width <= 1:
+            self.after(100, self.fit_to_width)
+            return
+        page = self.doc[0]  # Use first page for ratio
+        self.zoom_level = max(0.3, (canvas_width - 100) / page.rect.width)
+        self.load_document_continuous()
 
     def toggle_thumbnails(self):
         self.thumbnails_visible = not self.thumbnails_visible
         if self.thumbnails_visible:
-            self.thumbnail_frame.pack(side=tk.LEFT, fill=tk.Y)
+            self.thumbs_frame.pack(side=tk.LEFT, fill=tk.Y)
             self.update_thumbnails()
-            self.status_label.config(text="Thumbnails shown")
         else:
-            self.thumbnail_frame.pack_forget()
-            self.status_label.config(text="Thumbnails hidden")
+            self.thumbs_frame.pack_forget()
 
-    def fit_to_window(self):
-        if not self.pdf_doc:
+    def generate_thumbnails(self):
+        """Generate cached thumbnails in background thread for speed"""
+        self.thumbs_images = []
+        if not self.doc:
             return
-        try:
-            page = self.pdf_doc[self.current_page]
-            canvas_width = self.canvas.winfo_width()
-            canvas_height = self.canvas.winfo_height()
-            page_width, page_height = page.rect.width, page.rect.height
-            width_ratio = canvas_width / page_width
-            height_ratio = canvas_height / page_height
-            self.zoom_factor = min(width_ratio, height_ratio) / 2.0
-            self.update_page()
-            self.status_label.config(text="Fitted to window")
-            self.zoom_label.config(text=f"Zoom: {int(self.zoom_factor * 100)}%")
-        except Exception as e:
-            logging.error(f"Fit failed: {str(e)}")
 
-    def prev_page(self):
-        if self.current_page > 0:
-            self.current_page -= 1
-            self.update_page()
-            self.page_label.config(text=f"Page: {self.current_page + 1}/{self.pdf_doc.page_count}")
-            self.reset_search()
-            self._smooth_scroll(1.0)
+        def generate():
+            for page_num in range(len(self.doc)):
+                page = self.doc[page_num]
+                mat = fitz.Matrix(0.11, 0.11)
+                pix = page.get_pixmap(matrix=mat)
+                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                img = img.resize((120, int(120 * pix.height / pix.width)), Image.Resampling.LANCZOS)
+                thumb = ImageTk.PhotoImage(img)
+                self.thumbs_images.append(thumb)
+            self.after(0, self._thumbnails_ready)
 
-    def next_page(self):
-        if self.pdf_doc and self.current_page < self.pdf_doc.page_count - 1:
-            self.current_page += 1
-            self.update_page()
-            self.page_label.config(text=f"Page: {self.current_page + 1}/{self.pdf_doc.page_count}")
-            self.reset_search()
-            self._smooth_scroll(0.0)
+        threading.Thread(target=generate, daemon=True).start()
 
-    def zoom_in(self):
-        self.zoom_factor *= 1.2
-        self.update_page()
-        self.zoom_label.config(text=f"Zoom: {int(self.zoom_factor * 100)}%")
+    def _thumbnails_ready(self):
+        if self.thumbnails_visible:
+            self.update_thumbnails()
 
-    def zoom_out(self):
-        self.zoom_factor /= 1.2
-        if self.zoom_factor < 0.1:
-            self.zoom_factor = 0.1
-        self.update_page()
-        self.zoom_label.config(text=f"Zoom: {int(self.zoom_factor * 100)}%")
+    def refresh_thumbnails(self):
+        if self.thumbnails_visible:
+            self.update_thumbnails()
 
-    def search_text(self):
-        if not self.pdf_doc:
+    def update_thumbnails(self):
+        self.thumbs_canvas.delete("all")
+        if not self.thumbs_images or not self.doc:
             return
-        query = self.search_var.get().strip().lower()
-        if not query:
-            messagebox.showinfo("Search", "Enter a search term.")
-            return
-        self.search_results = []
-        for page_num in range(self.pdf_doc.page_count):
-            page = self.pdf_doc[page_num]
-            text_instances = page.search_for(query)
-            for rect in text_instances:
-                self.search_results.append((page_num, rect))
-        if self.search_results:
-            self.current_search_index = 0
-            self.highlight_search()
-            self.status_label.config(text=f"Found {len(self.search_results)} matches")
+
+        y_pos = 10
+        thumb_width = 110
+
+        for index, thumb in enumerate(self.thumbs_images):
+            is_current = (index == self.current_page)
+            border_color = "#4A90E2" if is_current else "#B0B0B0"
+            border_width = 3 if is_current else 1
+
+            img_height = thumb.height()
+
+            rect_top = y_pos - 8
+            rect_bot = y_pos + img_height + 22
+
+            self.thumbs_canvas.create_rectangle(
+                5, rect_top, thumb_width + 5, rect_bot,
+                outline=border_color, width=border_width, tags=(f"thumb_rect_{index}")
+            )
+
+            self.thumbs_canvas.create_image(
+                (thumb_width // 2) + 5, y_pos,
+                image=thumb, anchor="n",
+                tags=(f"thumb_img_{index}")
+            )
+
+            self.thumbs_canvas.create_text(
+                (thumb_width // 2) + 5, y_pos + img_height + 10,
+                text=f"Page {index + 1}",
+                font=("Arial", 8, "bold" if is_current else "normal"),
+                tags=(f"thumb_text_{index}")
+            )
+
+            def bind_all(tag):
+                self.thumbs_canvas.tag_bind(
+                    tag, "<Button-1>", lambda e, p=index: self.goto_thumb_page(p)
+                )
+
+            bind_all(f"thumb_rect_{index}")
+            bind_all(f"thumb_img_{index}")
+            bind_all(f"thumb_text_{index}")
+
+            y_pos += img_height + 40
+
+        self.thumbs_canvas.config(scrollregion=(0, 0, thumb_width + 10, y_pos + 20))
+
+    def goto_thumb_page(self, page_num):
+        if 0 <= page_num < len(self.doc):
+            self.current_page = page_num
+            self.update_page_info()
+            self.refresh_thumbnails()
+            # Scroll to page top
+            page_y = sum(self.page_heights[:page_num])
+            self.canvas.yview_moveto(page_y / self.canvas.bbox("all")[3])
+
+    def show_about(self):
+        messagebox.showinfo(
+            "About Simple PDF Reader",
+            "Simple PDF Reader v2.0\n\n"
+            "Project Owner / Contributor: H Vikram Kondapalli\n"
+            "Code Generator: Grok, created by xAI\n\n"
+            "Built using:\n"
+            "- Python\n"
+            "- PyMuPDF (for PDF rendering)\n"
+            "- Pillow (for image processing)\n"
+            "- Tkinter (for the graphical user interface)\n\n"
+            "A lightweight PDF reader with navigation, zoom and thumbnail features.\n\n"
+            "Thank you for using this reader!"
+        )
+
+    def open_new_pdf(self):
+        path = filedialog.askopenfilename(title="Open PDF File", filetypes=[("PDF Files", "*.pdf")])
+        if path:
+            self.open_pdf_document(path)
+
+    def show_welcome_screen(self):
+        self.canvas.delete("all")
+        # Wait for canvas to be fully sized
+        if self.canvas.winfo_width() > 1 and self.canvas.winfo_height() > 1:
+            self.canvas.create_text(
+                self.canvas.winfo_width() // 2,
+                self.canvas.winfo_height() // 2,
+                text="Simple PDF Reader v2.0\n\nClick 'Open PDF' to begin",
+                font=("Helvetica", 22, "italic"),
+                fill="gray60",
+                anchor="center"
+            )
         else:
-            messagebox.showinfo("Search", "No matches found.")
-            self.canvas.delete("highlight")
-            self.status_label.config(text="No matches")
+            self.after(100, self.show_welcome_screen)  # Retry
 
-    def next_search(self):
-        if self.search_results:
-            self.current_search_index = (self.current_search_index + 1) % len(self.search_results)
-            self.highlight_search()
-            self.status_label.config(text=f"Match {self.current_search_index + 1}/{len(self.search_results)}")
+    def on_closing(self):
+        if self.doc:
+            self.doc.close()
+        self.destroy()
 
-    def highlight_search(self):
-        self.canvas.delete("highlight")
-        if self.search_results:
-            page_num, rect = self.search_results[self.current_search_index]
-            if page_num != self.current_page:
-                self.current_page = page_num
-                self.update_page()
-                self.page_label.config(text=f"Page: {self.current_page + 1}/{self.pdf_doc.page_count}")
-            zoom = 2.0 * self.zoom_factor
-            x0, y0, x1, y1 = [coord * zoom for coord in rect]
-            canvas_width = self.canvas.winfo_width()
-            canvas_height = self.canvas.winfo_height()
-            pix = self.pdf_doc[self.current_page].get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-            x_offset = max(0, (canvas_width - pix.width) // 2)
-            y_offset = max(0, (canvas_height - pix.height) // 2)
-            self.canvas.create_rectangle(x0 + x_offset, y0 + y_offset, x1 + x_offset, y1 + y_offset, fill="yellow", stipple="gray50", tags="highlight")
-
-    def reset_search(self):
-        self.search_results = []
-        self.current_search_index = -1
-        self.canvas.delete("highlight")
 
 if __name__ == "__main__":
-    try:
-        root = tk.Tk()
-        app = PDFReaderApp(root)
-        if len(sys.argv) > 1:
-            pdf_path = sys.argv[1]
-            app.open_pdf(pdf_path)
-        root.mainloop()
-    except Exception as e:
-        logging.critical(f"App failed: {str(e)}")
-        messagebox.showerror("Error", f"Failed to start: {str(e)}")
-        sys.exit(1)
+    path = None
+    if len(sys.argv) > 1:
+        path = sys.argv[1]
+        if not os.path.isfile(path):
+            path = None
+
+    app = PDFViewer(path)
+    app.mainloop()
